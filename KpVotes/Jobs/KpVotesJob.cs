@@ -21,6 +21,8 @@ public class KpVotesJob(
     readonly JsonSerializerSettings _jsonSettings = new()
     {
         Formatting = Formatting.Indented,
+        NullValueHandling = NullValueHandling.Ignore,
+        
     };
 
     public async Task Execute(IJobExecutionContext context)
@@ -42,24 +44,32 @@ public class KpVotesJob(
         try
         {
             logger.LogInformation("Begin GetSiteVotes");
-            var siteVotes = await GetSiteVotes(cancel);
-            logger.LogInformation("End GetSiteVotes: {SiteVotesCount}", siteVotes.Count);
+            var pageVotes = await GetSiteVotes(cancel);
+            logger.LogInformation("End GetSiteVotes: {SiteVotesCount}", pageVotes.Count);
 
-            if (!siteVotes.Any())
+            if (!pageVotes.Any())
             {
                 logger.LogInformation("No site votes found");
                 return;
             }
 
             logger.LogInformation("Begin GetFileVotes");
-            var fileVotes = await GetFileVotes(Options.CachePath, cancel);
-            logger.LogInformation("End GetFileVotes: {FileVotesCount}", fileVotes?.Length);
+            var cacheVotes = await GetFileVotes(Options.CachePath, cancel);
+            logger.LogInformation("End GetFileVotes: {FileVotesCount}", cacheVotes?.Length);
 
-            logger.LogInformation("Begin SendVoteToTwitter");
-            var allVotes = (fileVotes ?? siteVotes).ToHashSet(x => new { x.Uri, x.Vote });
-            foreach (var vote in siteVotes)
-                if (allVotes.Add(vote))
+            if (cacheVotes == null)
+            {
+                logger.LogInformation("No cache found");
+                await SaveFileVotes(Options.CachePath, pageVotes.ToHashSet(), cancel);
+                logger.LogInformation("Cache created");
+            }
+            else
+            {
+                logger.LogInformation("Begin SendVoteToTwitter");
+                var allVotes = (cacheVotes ?? pageVotes).ToHashSet(x => new { x.Uri, x.Vote });
+                foreach (var vote in pageVotes)
                 {
+                    if (!allVotes.Add(vote)) continue;
                     await SendVoteToTwitter(vote);
                     logger.LogInformation("Begin SaveFileVotes: {FileVotesCount}:", allVotes.Count);
                     await SaveFileVotes(Options.CachePath, allVotes, cancel);
@@ -67,7 +77,8 @@ public class KpVotesJob(
                     await Task.Delay(Options.TwitterDelay, cancel);
                 }
 
-            logger.LogInformation("End SendVoteToTwitter");
+                logger.LogInformation("End SendVoteToTwitter");
+            }
 
             Clean();
         }
@@ -127,13 +138,15 @@ public class KpVotesJob(
 
     async Task<KpVote[]?> GetFileVotes(string path, CancellationToken cancel)
     {
-        if (!File.Exists(Options.CachePath)) return null;
+        if (!File.Exists(path)) return null;
         var text = await File.ReadAllTextAsync(path, cancel);
         return JsonConvert.DeserializeObject<KpVote[]>(text, _jsonSettings);
     }
 
     async Task SaveFileVotes(string path, HashSet<KpVote> allVotes, CancellationToken cancel)
     {
+        var dir = Path.GetDirectoryName(path);
+        if(!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
         var text = JsonConvert.SerializeObject(allVotes, _jsonSettings);
         await File.WriteAllTextAsync(path, text, cancel);
     }
