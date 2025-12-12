@@ -31,9 +31,6 @@ Host.CreateDefaultBuilder(args)
         services.AddOptions<AngleSharpLoaderOptions>().BindConfiguration(nameof(AngleSharpLoaderOptions));
         services.AddScoped<IKpLoader, AngleSharpLoader>();
         
-        // services.AddOptions<SeleniumLoaderOptions>().BindConfiguration(nameof(SeleniumLoaderOptions));
-        // services.AddScoped<IKpLoader, SeleniumLoader>();
-        
         services.AddOptions<ProxyOptions>().BindConfiguration(nameof(ProxyOptions));
         services.AddOptions<TwitterCredentials>().BindConfiguration(nameof(TwitterCredentials));
         services.AddScoped<ITwitterClient, TwitterClient>();
