@@ -1,4 +1,3 @@
-#nullable enable
 using Quartz;
 
 namespace KpVotes.Quartz;
