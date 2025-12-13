@@ -40,7 +40,7 @@ Host.CreateDefaultBuilder(args)
 
         var jobOptions = context.Configuration
             .GetSection(nameof(KpVotesJobOptions))
-            .Get<KpVotesJobOptions>();
+            .Get<KpVotesJobOptions>() ?? throw new InvalidOperationException($"Missing configuration section: {nameof(KpVotesJobOptions)}");
         services.AddQuartz(q => q.ScheduleJob<KpVotesJob>(jobOptions.Interval));
         services.AddQuartzHostedService(q =>
         {

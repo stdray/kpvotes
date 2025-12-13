@@ -66,7 +66,7 @@ public class KpVotesJob(
             else
             {
                 logger.LogInformation("Begin SendVoteToTwitter");
-                var allVotes = (cacheVotes ?? pageVotes).ToHashSet(x => new { x.Uri, x.Vote });
+                var allVotes = cacheVotes.ToHashSet(x => new { x.Uri, x.Vote });
                 foreach (var vote in pageVotes)
                 {
                     if (!allVotes.Add(vote)) continue;

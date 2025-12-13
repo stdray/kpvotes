@@ -1,4 +1,3 @@
-using AngleSharp;
 using AngleSharp.Html.Parser;
 
 namespace KpVotes.Kinopoisk;
@@ -15,10 +14,12 @@ public class KpParser : IKpParser
             from item in doc.QuerySelectorAll(Const.VotesSelector)
             let name = item.QuerySelector(".nameRus a")
             let vote = item.QuerySelector(".vote") ?? item.QuerySelector(".myVote")
-            where name != null && vote != null
+            where name is not null && vote is not null
+            let href = name.GetAttribute("href")
+            where !string.IsNullOrEmpty(href)
             select new KpVote
-            (   
-                name.GetAttribute("href"),
+            (
+                href!,
                 name.TextContent,
                 int.Parse(vote.TextContent)
             );
