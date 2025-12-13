@@ -24,4 +24,14 @@
         <Using Include="Xunit"/>
     </ItemGroup>
 
+    <ItemGroup>
+      <None Update="KpParser\data\votes_sample.big.htm">
+        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      </None>
+    </ItemGroup>
+
+    <ItemGroup>
+      <ProjectReference Include="..\KpVotes\KpVotes.csproj" />
+    </ItemGroup>
+
 </Project>

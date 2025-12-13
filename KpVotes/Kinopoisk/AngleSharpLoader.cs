@@ -13,8 +13,8 @@ public class AngleSharpLoader(IOptionsSnapshot<AngleSharpLoaderOptions> options)
             Headers = { ["User-Agent"] = options.Value.UserAgent }
         };
         var config = Configuration.Default.WithDefaultLoader().With(requester);
-        var context = BrowsingContext.New(config);
-        var doc = await context.OpenAsync(uri.ToString(), cancellation: cancellation);
+        using var context = BrowsingContext.New(config);
+        using var doc = await context.OpenAsync(uri.ToString(), cancellation: cancellation);
         return doc.ToHtml();
     }
 }
