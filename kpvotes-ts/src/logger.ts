@@ -30,4 +30,10 @@ export function log(
 		messageTemplate,
 		properties: properties ?? {},
 	});
+
+	// Console mirror for local visibility
+	const tpl = messageTemplate.replace(/\{(\w+)\}/g, (_, k) => String(properties?.[k] ?? `{${k}}`));
+	const ts = new Date().toISOString().replace("T", " ").slice(0, 19);
+	const fn = level === "Error" ? console.error : console.log;
+	fn(`[${ts}] ${level}: ${tpl}`);
 }
