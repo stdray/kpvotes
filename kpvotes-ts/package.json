@@ -13,8 +13,9 @@
   "dependencies": {
     "@stdray-npm/yobaconf-client": "^0.1.0-ci.128",
     "cheerio": "^1.2.0",
-    "seq-logging": "^3.0.0",
-    "twitter-api-v2": "^1.29.0"
+    "twitter-api-v2": "^1.29.0",
+    "winston": "^3.19.0",
+    "winston-seq": "^0.1.0"
   },
   "scripts": {
     "start": "bun run src/index.ts",

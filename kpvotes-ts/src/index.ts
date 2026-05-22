@@ -10,7 +10,7 @@ async function main(): Promise<void> {
 	const cfg = await getConfig();
 	initLogger(cfg);
 
-	log("Information", "KpVotes starting", {
+	log("info", "KpVotes starting", {
 		intervalMinutes: cfg.intervalMinutes,
 		app: "kpvotes-ts",
 	});
@@ -22,19 +22,19 @@ async function main(): Promise<void> {
 
 async function runCycle(cfg: Config): Promise<void> {
 	const startedAt = Date.now();
-	log("Information", "Cycle started");
+	log("info", "Cycle started");
 
 	try {
-		log("Information", "Loading page from Kinopoisk", { uri: `${cfg.kpUri}/${cfg.votesUri}` });
+		log("info", "Loading page from Kinopoisk", { uri: `${cfg.kpUri}/${cfg.votesUri}` });
 		const html = await loadHtml(cfg);
 
-		log("Information", "Parsing votes", { htmlSize: html.length });
+		log("info", "Parsing votes", { htmlSize: html.length });
 		const freshVotes = parseVotes(html);
-		log("Information", "Parse complete", { votesFound: freshVotes.length });
+		log("info", "Parse complete", { votesFound: freshVotes.length });
 
 		if (!freshVotes.length) {
 			const block = detectBlock(html);
-			log("Warning", block ? `Blocked: ${block}` : "No votes found", {
+			log("warn", block ? `Blocked: ${block}` : "No votes found", {
 				htmlSize: html.length,
 				blockReason: block,
 			});
@@ -44,13 +44,13 @@ async function runCycle(cfg: Config): Promise<void> {
 		const cached = await readCache(cfg.cachePath);
 
 		if (!cached) {
-			log("Information", "No cache, creating initial cache", { voteCount: freshVotes.length });
+			log("info", "No cache, creating initial cache", { voteCount: freshVotes.length });
 			writeCache(cfg.cachePath, freshVotes);
 			return;
 		}
 
 		const newVotes = diff(cached, freshVotes);
-		log("Information", "Diff complete", {
+		log("info", "Diff complete", {
 			cached: cached.length,
 			fresh: freshVotes.length,
 			new: newVotes.length,
@@ -63,9 +63,9 @@ async function runCycle(cfg: Config): Promise<void> {
 			await sleep(30000);
 		}
 
-		log("Information", "Cycle complete", { elapsedMs: Date.now() - startedAt });
+		log("info", "Cycle complete", { elapsedMs: Date.now() - startedAt });
 	} catch (err) {
-		log("Error", "Cycle failed: {error}", { error: String(err) });
+		log("error", "Cycle failed", { error: String(err) });
 	}
 }
 
@@ -76,9 +76,9 @@ async function postVote(cfg: Config, vote: Vote): Promise<void> {
 	const uri = `${cfg.kpUri}${vote.Uri}`;
 	const text = `${vote.Name}.\r\nМоя оценка ${vote.Vote} из 10 ${stars} #kinopoisk\r\n${uri}`;
 
-	log("Information", "Posting tweet", { name: vote.Name, vote: vote.Vote, uri: vote.Uri });
+	log("info", "Posting tweet", { name: vote.Name, vote: vote.Vote, uri: vote.Uri });
 	await postTweet(cfg, text);
-	log("Information", "Tweet posted", { uri: vote.Uri });
+	log("info", "Tweet posted", { uri: vote.Uri });
 }
 
 function sleep(ms: number): Promise<void> {
