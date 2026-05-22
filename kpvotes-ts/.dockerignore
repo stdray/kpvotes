@@ -1,0 +1,10 @@
+node_modules
+.git
+*.md
+tests
+tools
+.config
+.gitignore
+.dockerignore
+.env.example
+bun.lock

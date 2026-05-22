@@ -1,0 +1,6 @@
+# Mount config with secrets for local/dev use
+services:
+  app:
+    volumes:
+      - ./data:/app/data
+      - ./config.local.json:/app/config.json:ro

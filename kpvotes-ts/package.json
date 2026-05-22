@@ -1,0 +1,24 @@
+{
+  "name": "kpvotes-ts",
+  "module": "src/index.ts",
+  "type": "module",
+  "private": true,
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "cheerio": "^1.2.0",
+    "twitter-api-v2": "^1.29.0"
+  },
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "check": "tsc --noEmit",
+    "test": "bun test",
+    "docker:build": "docker build -t kpvotes .",
+    "docker:up": "docker compose up -d",
+    "docker:down": "docker compose down"
+  }
+}

@@ -1,4 +1,5 @@
 # Agents
+Invariants: see [doc/invariants.md](doc/invariants.md). Status tracked in `my/prj/KpVotes/invariant-status.md`.
 
 ## Зачем нужны агенты
 

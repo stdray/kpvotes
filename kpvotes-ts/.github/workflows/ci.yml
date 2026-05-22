@@ -1,0 +1,118 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ['deploy']
+  pull_request:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: ci-${{ github.ref_name }}-${{ github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  # ─── PR validation: lint + tests ───
+  ci:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Cake CI target (Lint + Test)
+        run: |
+          chmod +x ./build.sh
+          ./build.sh --target=CI
+
+  # ─── Docker build + push to ghcr.io (main pushes + deploy tag) ───
+  publish:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    outputs:
+      dockerTag: ${{ steps.publish.outputs.dockerTag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Cake DockerPush (build + smoke + push)
+        id: publish
+        run: |
+          set -euo pipefail
+          chmod +x ./build.sh
+          TAG_FILE="$RUNNER_TEMP/docker-tag.txt"
+          ./build.sh --target=DockerPush \
+            --dockerPush=true \
+            --ghcrRepository=${{ github.repository }} \
+            --dockerTagOutput="$TAG_FILE" \
+            --dockerCacheFrom=type=gha \
+            --dockerCacheTo=type=gha,mode=max
+          echo "dockerTag=$(cat "$TAG_FILE")" >> "$GITHUB_OUTPUT"
+
+  # ─── Deploy via SSH (only on manual `deploy` tag push) ───
+  deploy:
+    if: github.event_name == 'push' && github.ref == 'refs/tags/deploy'
+    needs: publish
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1
+        env:
+          TWITTER_APPKEY: ${{ secrets.KPVOTES_TWITTER_APPKEY }}
+          TWITTER_APPSECRET: ${{ secrets.KPVOTES_TWITTER_APPSECRET }}
+          TWITTER_ACCESSTOKEN: ${{ secrets.KPVOTES_TWITTER_ACCESSTOKEN }}
+          TWITTER_ACCESSSECRET: ${{ secrets.KPVOTES_TWITTER_ACCESSSECRET }}
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USERNAME }}
+          password: ${{ secrets.DEPLOY_PASSWORD }}
+          envs: TWITTER_APPKEY,TWITTER_APPSECRET,TWITTER_ACCESSTOKEN,TWITTER_ACCESSSECRET
+          script: |
+            set -euo pipefail
+            IMAGE="ghcr.io/${{ github.repository }}:${{ needs.publish.outputs.dockerTag }}"
+            cd /opt/kpvotes
+            docker compose pull app || docker pull "$IMAGE"
+            docker compose down app || true
+            KPVOTES_TWITTER_APPKEY="$TWITTER_APPKEY" \
+            KPVOTES_TWITTER_APPSECRET="$TWITTER_APPSECRET" \
+            KPVOTES_TWITTER_ACCESSTOKEN="$TWITTER_ACCESSTOKEN" \
+            KPVOTES_TWITTER_ACCESSSECRET="$TWITTER_ACCESSSECRET" \
+              docker compose up -d app
+            docker system prune -a -f
