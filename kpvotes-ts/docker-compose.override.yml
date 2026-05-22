@@ -1,6 +1,6 @@
-# Mount config with secrets for local/dev use
+# Local/dev overrides
+# Mount your data directory and set env vars via .env or shell
 services:
   app:
     volumes:
       - ./data:/app/data
-      - ./config.local.json:/app/config.json:ro

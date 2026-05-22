@@ -1,31 +1,53 @@
-import type { Config } from './types';
+import { YobaConfClient } from "@stdray-npm/yobaconf-client";
+import type { Config } from "./types";
 
 let _config: Config | null = null;
 
-export async function getConfig(configPath?: string): Promise<Config> {
+export async function getConfig(): Promise<Config> {
   if (_config) return _config;
 
-  const path = configPath
-    || process.env.KPVOTES_CONFIG
-    || `${import.meta.dirname}/../config.json`;
+  const endpoint = process.env.YOBACONF_ENDPOINT;
+  const apiKey = process.env.YOBACONF_API_KEY;
+  if (!endpoint || !apiKey) {
+    throw new Error("YOBACONF_ENDPOINT and YOBACONF_API_KEY are required");
+  }
 
-  const file = Bun.file(path);
-  if (!(await file.exists())) throw new Error(`Config file not found: ${path}`);
+  const client = new YobaConfClient({
+    endpoint,
+    apiKey,
+    tags: { project: "kpvotes" },
+    template: "flat",
+  });
 
-  _config = (await file.json()) as Config;
+  const cfg = await client.fetch();
 
-  // Env overrides
-  const env = process.env;
-  if (env.KPVOTES_CACHE_PATH) _config.cachePath = env.KPVOTES_CACHE_PATH;
-  if (env.KPVOTES_INTERVAL_MINUTES) _config.intervalMinutes = Number(env.KPVOTES_INTERVAL_MINUTES);
-  if (env.KPVOTES_KP_URI) _config.kpUri = env.KPVOTES_KP_URI;
-  if (env.KPVOTES_VOTES_URI) _config.votesUri = env.KPVOTES_VOTES_URI;
-  if (env.KPVOTES_TWITTER_APPKEY) _config.twitter.appKey = env.KPVOTES_TWITTER_APPKEY;
-  if (env.KPVOTES_TWITTER_APPSECRET) _config.twitter.appSecret = env.KPVOTES_TWITTER_APPSECRET;
-  if (env.KPVOTES_TWITTER_ACCESSTOKEN) _config.twitter.accessToken = env.KPVOTES_TWITTER_ACCESSTOKEN;
-  if (env.KPVOTES_TWITTER_ACCESSSECRET) _config.twitter.accessSecret = env.KPVOTES_TWITTER_ACCESSSECRET;
-  if (env.KPVOTES_PROXY_SERVER) _config.proxy = { ..._config.proxy, server: env.KPVOTES_PROXY_SERVER };
-  if (env.KPVOTES_LIGHTPANDA_CDP) _config.lightpanda.cdpUrl = env.KPVOTES_LIGHTPANDA_CDP;
+  const proxyServer = cfg.get("kpvotes.proxy-server");
+  const proxyUser = cfg.get("kpvotes.proxy-username");
+  const proxyPass = cfg.get("kpvotes.proxy-password");
+
+  _config = {
+    kpUri: cfg.get("kpvotes.kp-uri")!,
+    votesUri: cfg.get("kpvotes.votes-uri")!,
+    cachePath: cfg.get("kpvotes.cache-path")!,
+    intervalMinutes: cfg.getNumber("kpvotes.interval-minutes") ?? 120,
+    userAgent: cfg.get("kpvotes.user-agent")!,
+    twitter: {
+      appKey: cfg.get("kpvotes.twitter-app-key")!,
+      appSecret: cfg.get("kpvotes.twitter-app-secret")!,
+      accessToken: cfg.get("kpvotes.twitter-access-token")!,
+      accessSecret: cfg.get("kpvotes.twitter-access-secret")!,
+    },
+    proxy: proxyServer
+      ? {
+          server: proxyServer,
+          username: proxyUser ?? undefined,
+          password: proxyPass ?? undefined,
+        }
+      : undefined,
+    lightpanda: {
+      cdpUrl: cfg.get("kpvotes.lightpanda-cdp-url")!,
+    },
+  };
 
   return _config;
 }

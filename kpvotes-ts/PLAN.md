@@ -75,13 +75,11 @@ kpvotes-ts/
 2. **[x] Прокси-конфиг** — server + username + password в YobaConf (см. ниже).
 3. **[ ] Перенос кэша** — скопировать старый `votes.json` в `data/votes.json`.
 4. **[ ] Продакшн-деплой** — настроить на сервере где сейчас работает .NET-версия.
-5. **[ ] Интеграция с YobaConf** — заменить `config.json` + env vars на `@stdray-npm/yobaconf-client` SDK.
+5. **[x] Интеграция с YobaConf** — `config.ts` использует `@stdray-npm/yobaconf-client`. `config.json` больше не нужен. Bootstrap через `YOBACONF_ENDPOINT` + `YOBACONF_API_KEY`.
 
 ## YobaConf bindings
 
 Конфигурация и секреты вынесены в YobaConf. Все binding-и имеют `tagSet: {project: "kpvotes"}`.
-
-Скрипт для создания: `../setup-yobaconf-bindings.ps1`.
 
 ### Plain (7)
 | keyPath | value |

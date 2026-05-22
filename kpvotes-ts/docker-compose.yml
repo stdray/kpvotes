@@ -14,4 +14,5 @@ services:
       - ./data:/app/data
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
-      - KPVOTES_CONFIG=/app/config.json
+      - YOBACONF_ENDPOINT=${YOBACONF_ENDPOINT}
+      - YOBACONF_API_KEY=${YOBACONF_API_KEY}
