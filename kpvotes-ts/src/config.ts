@@ -42,8 +42,9 @@ export async function getConfig(): Promise<Config> {
 			accessToken: required(cfg.get("kpvotes.twitter-access-token"), "kpvotes.twitter-access-token"),
 			accessSecret: required(cfg.get("kpvotes.twitter-access-secret"), "kpvotes.twitter-access-secret"),
 		},
-		lightpanda: {
-			cdpUrl: required(cfg.get("kpvotes.lightpanda-cdp-url"), "kpvotes.lightpanda-cdp-url"),
+		seq: {
+			serverUrl: required(cfg.get("seq.server-url"), "seq.server-url"),
+			apiKey: required(cfg.get("seq.api-key"), "seq.api-key"),
 		},
 	};
 

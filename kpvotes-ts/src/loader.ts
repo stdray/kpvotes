@@ -1,84 +1,91 @@
 import type { Config } from "./types";
 
 /**
- * Loads HTML via Lightpanda fetch command.
- * Expects Lightpanda to be running in a sibling Docker container.
+ * Loads HTML via Lightpanda CDP (Chrome DevTools Protocol).
+ *
+ * Flow: Target.createTarget → Target.attachToTarget (sessionId)
+ *       → Page.enable → Page.navigate → Page.loadEventFired
+ *       → Runtime.evaluate (document.documentElement.outerHTML)
  */
 export async function loadHtml(cfg: Config): Promise<string> {
+	const cdpUrl = process.env.KPVOTES_LIGHTPANDA_CDP ?? "ws://127.0.0.1:9222";
 	const uri = `${cfg.kpUri}/${cfg.votesUri}`;
 
-	const args = [
-		"exec",
-		"lightpanda",
-		"lightpanda",
-		"fetch",
-		"--dump",
-		"html",
-		"--http-timeout",
-		"60000",
-		"--wait-ms",
-		"15000",
-		uri,
-	];
+	const ws = new WebSocket(cdpUrl + "/");
 
-	const out = await run("docker", args);
+	let msgId = 0;
+	const pending = new Map<number, (v: Record<string, unknown>) => void>();
+	let loadFired = false;
 
-	// Strip log lines before <!DOCTYPE or <html
-	const htmlStart = Math.min(
-		out.indexOf("<!DOCTYPE") === -1 ? Infinity : out.indexOf("<!DOCTYPE"),
-		out.indexOf("<html") === -1 ? Infinity : out.indexOf("<html"),
-	);
-	if (htmlStart === Infinity) {
-		throw new Error(`No HTML in Lightpanda output: ${out.slice(0, 500)}`);
-	}
+	ws.onmessage = (event) => {
+		const msg = JSON.parse(event.data as string);
+		if (msg.id !== undefined && pending.has(msg.id)) {
+			const resolve = pending.get(msg.id)!;
+			pending.delete(msg.id);
+			resolve(msg);
+		}
+		if (msg.method === "Page.loadEventFired") {
+			loadFired = true;
+		}
+	};
 
-	return out.slice(htmlStart);
-}
-
-function run(cmd: string, args: string[]): Promise<string> {
-	return new Promise((resolve, reject) => {
-		const proc = Bun.spawn([cmd, ...args], {
-			stdout: "pipe",
-			stderr: "pipe",
+	const send = (method: string, params?: Record<string, unknown>): Promise<Record<string, unknown>> => {
+		const id = ++msgId;
+		return new Promise((resolve) => {
+			pending.set(id, resolve);
+			ws.send(JSON.stringify({ id, method, params }));
 		});
-		let stdout = "";
-		let stderr = "";
+	};
 
-		const decoder = new TextDecoder();
-		const read = (stream: ReadableStream<Uint8Array>, buf: { s: string }) =>
-			new Promise<void>((resolve, reject) => {
-				const reader = stream.getReader();
-				const pump = () => {
-					reader
-						.read()
-						.then(({ done, value }) => {
-							if (done) {
-								buf.s += decoder.decode();
-								resolve();
-							} else {
-								buf.s += decoder.decode(value, { stream: true });
-								pump();
-							}
-						})
-						.catch(reject);
-				};
-				pump();
-			});
-
-		const outBuf = { s: "" };
-		const errBuf = { s: "" };
-
-		Promise.all([read(proc.stdout, outBuf), read(proc.stderr, errBuf)])
-			.then(async () => {
-				const exitCode = await proc.exited;
-				stdout = outBuf.s;
-				stderr = errBuf.s;
-				if (exitCode !== 0) {
-					reject(new Error(`Lightpanda fetch failed (exit ${exitCode}): ${stderr}`));
-				} else {
-					resolve(stdout);
-				}
-			})
-			.catch(reject);
+	await new Promise<void>((resolve, reject) => {
+		ws.onopen = () => resolve();
+		ws.onerror = () => reject(new Error("CDP WebSocket connection failed"));
 	});
+
+	let sessionId: string;
+	try {
+		// Create target
+		const ct = await send("Target.createTarget", { url: "about:blank" });
+		const targetId = (ct.result as { targetId: string }).targetId;
+
+		// Attach to get sessionId
+		const at = await send("Target.attachToTarget", { targetId, flatten: true });
+		sessionId = (at.result as { sessionId: string }).sessionId;
+
+		const session = (method: string, params?: Record<string, unknown>) =>
+			send(method, { ...params, sessionId });
+
+		// Enable Page and navigate
+		await session("Page.enable");
+		await session("Page.navigate", { url: uri });
+
+		// Wait for load event (60s timeout)
+		await new Promise<void>((resolve, reject) => {
+			const timeout = setTimeout(() => reject(new Error("Page load timed out after 60s")), 60000);
+			const check = setInterval(() => {
+				if (loadFired) {
+					clearTimeout(timeout);
+					clearInterval(check);
+					resolve();
+				}
+			}, 500);
+		});
+
+		// Extra wait for JS rendering
+		await new Promise((r) => setTimeout(r, 15000));
+
+		// Get HTML
+		const re = await session("Runtime.evaluate", {
+			expression: "document.documentElement.outerHTML",
+			returnByValue: true,
+		});
+		const html = (re.result as { result?: { value?: string } })?.result?.value ?? "";
+		if (!html) throw new Error("Empty HTML from Lightpanda");
+
+		// Save page to disk
+		Bun.write(`data/pages/${new Date().toISOString().replace(/:/g, "-")}.html`, html);
+		return html;
+	} finally {
+		ws.close();
+	}
 }

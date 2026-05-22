@@ -7,4 +7,3 @@ tools
 .gitignore
 .dockerignore
 .env.example
-bun.lock

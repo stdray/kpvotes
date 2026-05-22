@@ -1,13 +1,19 @@
-import { diff, readCache, writeCache } from "./cache";
+import { readCache, writeCache, diff } from "./cache";
 import { getConfig } from "./config";
 import { loadHtml } from "./loader";
-import { parseVotes } from "./parser";
+import { initLogger, log } from "./logger";
+import { detectBlock, parseVotes } from "./parser";
 import { postTweet } from "./twitter";
 import type { Config, Vote } from "./types";
 
 async function main(): Promise<void> {
 	const cfg = await getConfig();
-	console.log("[kpvotes] Starting, interval:", cfg.intervalMinutes, "min");
+	initLogger(cfg);
+
+	log("Information", "KpVotes starting", {
+		intervalMinutes: cfg.intervalMinutes,
+		app: "kpvotes-ts",
+	});
 
 	await runCycle(cfg);
 
@@ -15,30 +21,40 @@ async function main(): Promise<void> {
 }
 
 async function runCycle(cfg: Config): Promise<void> {
+	const startedAt = Date.now();
+	log("Information", "Cycle started");
+
 	try {
-		console.log("[kpvotes] Loading page...");
+		log("Information", "Loading page from Kinopoisk", { uri: `${cfg.kpUri}/${cfg.votesUri}` });
 		const html = await loadHtml(cfg);
 
-		console.log("[kpvotes] Parsing votes...");
+		log("Information", "Parsing votes", { htmlSize: html.length });
 		const freshVotes = parseVotes(html);
-		console.log(`[kpvotes] Found ${freshVotes.length} votes`);
+		log("Information", "Parse complete", { votesFound: freshVotes.length });
 
 		if (!freshVotes.length) {
-			console.log("[kpvotes] No votes found");
+			const block = detectBlock(html);
+			log("Warning", block ? `Blocked: ${block}` : "No votes found", {
+				htmlSize: html.length,
+				blockReason: block,
+			});
 			return;
 		}
 
 		const cached = await readCache(cfg.cachePath);
 
 		if (!cached) {
-			console.log("[kpvotes] No cache, creating...");
+			log("Information", "No cache, creating initial cache", { voteCount: freshVotes.length });
 			writeCache(cfg.cachePath, freshVotes);
-			console.log("[kpvotes] Cache created with", freshVotes.length, "votes");
 			return;
 		}
 
 		const newVotes = diff(cached, freshVotes);
-		console.log(`[kpvotes] New votes: ${newVotes.length}`);
+		log("Information", "Diff complete", {
+			cached: cached.length,
+			fresh: freshVotes.length,
+			new: newVotes.length,
+		});
 
 		for (const vote of newVotes) {
 			await postVote(cfg, vote);
@@ -47,9 +63,9 @@ async function runCycle(cfg: Config): Promise<void> {
 			await sleep(30000);
 		}
 
-		console.log("[kpvotes] Cycle complete");
+		log("Information", "Cycle complete", { elapsedMs: Date.now() - startedAt });
 	} catch (err) {
-		console.error("[kpvotes] Error:", err);
+		log("Error", "Cycle failed: {error}", { error: String(err) });
 	}
 }
 
@@ -60,9 +76,9 @@ async function postVote(cfg: Config, vote: Vote): Promise<void> {
 	const uri = `${cfg.kpUri}${vote.Uri}`;
 	const text = `${vote.Name}.\r\nМоя оценка ${vote.Vote} из 10 ${stars} #kinopoisk\r\n${uri}`;
 
-	console.log(`[kpvotes] Posting: ${vote.Name} (${vote.Vote}/10)`);
+	log("Information", "Posting tweet", { name: vote.Name, vote: vote.Vote, uri: vote.Uri });
 	await postTweet(cfg, text);
-	console.log(`[kpvotes] Posted: ${vote.Uri}`);
+	log("Information", "Tweet posted", { uri: vote.Uri });
 }
 
 function sleep(ms: number): Promise<void> {

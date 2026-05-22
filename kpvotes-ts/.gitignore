@@ -16,6 +16,9 @@ _.log
 report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 # local config with secrets
 config.local.json
+# runtime artifacts
+debug.html
+data/pages/
 
 # dotenv environment variable files
 .env

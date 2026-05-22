@@ -21,7 +21,8 @@ export interface Config {
 		username?: string;
 		password?: string;
 	};
-	lightpanda: {
-		cdpUrl: string;
+	seq: {
+		serverUrl: string;
+		apiKey: string;
 	};
 }

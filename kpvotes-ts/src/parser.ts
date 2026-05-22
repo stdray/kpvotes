@@ -5,6 +5,14 @@ import type { Vote } from "./types";
 const VOTES_SELECTOR = ".historyVotes .item";
 const CAPTCHA_SELECTOR = ".CheckboxCaptcha-Button";
 
+export type BlockReason = "captcha" | "vpn" | "bot" | null;
+
+export function detectBlock(html: string): BlockReason {
+	if (html.includes("CheckboxCaptcha")) return "captcha";
+	if (html.includes("Are you not a robot")) return "bot";
+	if (html.includes("you're using a") && html.includes("VPN")) return "vpn";
+	return null;
+}
 export function parseVotes(html: string): Vote[] {
 	const $ = cheerio.load(html);
 
