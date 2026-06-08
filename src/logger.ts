@@ -1,5 +1,6 @@
 import { SeqTransport } from "@datalust/winston-seq";
 import winston from "winston";
+import { runtimeInfo, tagVector } from "./runtime";
 import type { Config } from "./types";
 
 let _logger: winston.Logger | null = null;
@@ -14,10 +15,19 @@ export function initLogger(cfg: Config): winston.Logger {
 		onError: (e) => console.error("[seq]", e.message),
 	});
 
+	const info = runtimeInfo();
+
 	_logger = winston.createLogger({
 		level: process.env.KPVOTES_LOG_LEVEL ?? "info",
-		// Stamped on every event so the PetBox log can be filtered by app.
-		defaultMeta: { app: "kpvotes-ts" },
+		// Stamped on every event so the PetBox log says which build, on which host,
+		// under which tag-vector produced it.
+		defaultMeta: {
+			app: info.app,
+			version: info.version,
+			sha: info.sha,
+			host: info.host,
+			...tagVector(),
+		},
 		format: winston.format.combine(
 			winston.format.timestamp({ format: "YYYY-MM-DD HH:mm:ss" }),
 			winston.format.errors({ stack: true }),
@@ -25,12 +35,16 @@ export function initLogger(cfg: Config): winston.Logger {
 		),
 		transports: [
 			new winston.transports.Console({
+				// Console stays terse: drop the per-event identity meta (it's on every
+				// line); the full context goes to Seq and the startup log below.
 				format: winston.format.combine(
 					winston.format.colorize(),
-					winston.format.printf(({ timestamp, level, message, app: _app, ...rest }) => {
-						const meta = Object.keys(rest).length ? ` ${JSON.stringify(rest)}` : "";
-						return `${timestamp} ${level}: ${message}${meta}`;
-					}),
+					winston.format.printf(
+						({ timestamp, level, message, app: _a, version: _v, sha: _s, host: _h, project: _p, ...rest }) => {
+							const meta = Object.keys(rest).length ? ` ${JSON.stringify(rest)}` : "";
+							return `${timestamp} ${level}: ${message}${meta}`;
+						},
+					),
 				),
 			}),
 			_seqTransport,

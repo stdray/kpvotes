@@ -1,8 +1,10 @@
 import { CacheStore, diff } from "./cache";
 import { getConfig } from "./config";
+import { type HealthStatus, pushHealth } from "./health";
 import { loadHtml } from "./loader";
 import { closeLogger, initLogger, log } from "./logger";
 import { detectBlock, parseVotes } from "./parser";
+import { runtimeInfo, tagVector } from "./runtime";
 import { postTweet } from "./twitter";
 import type { Config, Vote } from "./types";
 
@@ -10,7 +12,19 @@ async function main(): Promise<void> {
 	const cfg = await getConfig();
 	initLogger(cfg);
 
+	const rt = runtimeInfo();
+	// Full startup context: which build, on which machine, under which tag-vector.
 	log("info", "KpVotes starting", {
+		version: rt.version,
+		sha: rt.sha,
+		buildDate: rt.buildDate,
+		host: rt.host,
+		platform: rt.platform,
+		arch: rt.arch,
+		nodeVersion: rt.nodeVersion,
+		pid: rt.pid,
+		containerized: rt.containerized,
+		tagVector: tagVector(),
 		intervalMinutes: cfg.intervalMinutes,
 		userAgent: cfg.userAgent,
 		proxyEnabled: cfg.proxyEnabled,
@@ -47,6 +61,11 @@ async function runCycle(cfg: Config, cache: CacheStore): Promise<void> {
 	const startedAt = Date.now();
 	log("info", "Cycle started");
 
+	// degraded = ran but couldn't read votes (SSO stub / block / no votes);
+	// unhealthy = threw; healthy = completed a real pass.
+	let status: HealthStatus = "healthy";
+	const extra: Record<string, string> = {};
+
 	try {
 		log("info", "Loading page from Kinopoisk", { uri: cfg.votesUrl });
 		const html = await loadHtml(cfg);
@@ -61,6 +80,8 @@ async function runCycle(cfg: Config, cache: CacheStore): Promise<void> {
 				htmlSize: html.length,
 				blockReason: block,
 			});
+			status = "degraded";
+			extra.reason = block ?? "no-votes";
 			return;
 		}
 
@@ -100,14 +121,25 @@ async function runCycle(cfg: Config, cache: CacheStore): Promise<void> {
 					uri: vote.Uri,
 					error: err instanceof Error ? err : new Error(String(err)),
 				});
+				status = "degraded";
+				extra.reason = "tweet-failed";
 			}
 		}
 
 		log("info", "Cycle complete", { elapsedMs: Date.now() - startedAt });
 	} catch (err) {
+		status = "unhealthy";
+		extra.reason = "cycle-error";
 		log("error", "Cycle failed", {
 			error: err instanceof Error ? err : new Error(String(err)),
 		});
+	} finally {
+		// Heartbeat so PetBox knows the worker is alive and how the last run went.
+		try {
+			await pushHealth(cfg, status, { ...extra, elapsedMs: String(Date.now() - startedAt) });
+		} catch (err) {
+			log("warn", "Health push failed", { error: err instanceof Error ? err.message : String(err) });
+		}
 	}
 }
 
