@@ -18,7 +18,11 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 config.local.json
 # runtime artifacts
 debug.html
-data/pages/
+# local runtime data (cache lives in PetBox; page dumps are throwaway)
+data/
+
+# npm registry auth (not needed: @stdray-npm is public npm)
+.npmrc
 
 # dotenv environment variable files
 .env

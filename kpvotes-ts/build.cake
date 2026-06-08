@@ -46,13 +46,13 @@ Task("Version")
 Task("Lint")
     .Does(() =>
 {
-    RunCmd("bun", "run check");
+    RunCmd("npx", "tsc --noEmit");
 });
 
 Task("Test")
     .Does(() =>
 {
-    RunCmd("bun", "test");
+    RunCmd("npx", "vitest run --exclude 'tests/integration/**'");
 });
 
 Task("Docker")

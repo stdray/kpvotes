@@ -1,4 +1,4 @@
-import { YobaConfClient } from "@stdray-npm/yobaconf-client";
+import { PetBoxConfigClient } from "@stdray-npm/petbox-client";
 import type { Config } from "./types";
 
 let _config: Config | null = null;
@@ -11,13 +11,13 @@ function required(val: string | undefined, name: string): string {
 export async function getConfig(): Promise<Config> {
 	if (_config) return _config;
 
-	const endpoint = process.env.YOBACONF_ENDPOINT;
-	const apiKey = process.env.YOBACONF_API_KEY;
+	const endpoint = process.env.PETBOX_ENDPOINT;
+	const apiKey = process.env.PETBOX_API_KEY;
 	if (!endpoint || !apiKey) {
-		throw new Error("YOBACONF_ENDPOINT and YOBACONF_API_KEY are required");
+		throw new Error("PETBOX_ENDPOINT and PETBOX_API_KEY are required");
 	}
 
-	const client = new YobaConfClient({
+	const client = new PetBoxConfigClient({
 		endpoint,
 		apiKey,
 		tags: { project: "kpvotes" },
@@ -26,16 +26,27 @@ export async function getConfig(): Promise<Config> {
 
 	const cfg = await client.fetch();
 
+	const proxyEnabled = cfg.get("kpvotes.proxy-enabled") === "true";
 	const proxyServer = cfg.get("kpvotes.proxy-server");
 	const proxyUser = cfg.get("kpvotes.proxy-username");
 	const proxyPass = cfg.get("kpvotes.proxy-password");
 
+	const dumpPages = cfg.get("kpvotes.dump-pages") === "true";
+	const dataPath = (process.env.KPVOTES_DATA_PATH ?? "data").replace(/\/+$/, "");
+
 	const obj: Config = {
-		kpUri: required(cfg.get("kpvotes.kp-uri"), "kpvotes.kp-uri"),
-		votesUri: required(cfg.get("kpvotes.votes-uri"), "kpvotes.votes-uri"),
-		cachePath: required(cfg.get("kpvotes.cache-path"), "kpvotes.cache-path"),
+		votesUrl: required(cfg.get("kpvotes.votes-url"), "kpvotes.votes-url"),
+		dataPath,
+		petbox: {
+			endpoint,
+			apiKey,
+			project: "kpvotes",
+			db: process.env.PETBOX_DATA_DB ?? "kpvotes-cache",
+		},
+		dumpPages,
 		intervalMinutes: cfg.getNumber("kpvotes.interval-minutes") ?? 120,
 		userAgent: required(cfg.get("kpvotes.user-agent"), "kpvotes.user-agent"),
+		proxyEnabled,
 		twitter: {
 			appKey: required(cfg.get("kpvotes.twitter-app-key"), "kpvotes.twitter-app-key"),
 			appSecret: required(cfg.get("kpvotes.twitter-app-secret"), "kpvotes.twitter-app-secret"),
@@ -48,7 +59,7 @@ export async function getConfig(): Promise<Config> {
 		},
 	};
 
-	if (proxyServer) {
+	if (proxyEnabled && proxyServer) {
 		obj.proxy = { server: proxyServer };
 		if (proxyUser !== undefined) obj.proxy.username = proxyUser;
 		if (proxyPass !== undefined) obj.proxy.password = proxyPass;

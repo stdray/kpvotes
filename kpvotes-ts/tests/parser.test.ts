@@ -1,9 +1,9 @@
-import { describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { describe, expect, it } from "vitest";
 import { parseVotes } from "../src/parser";
 
-const samplePath = join(import.meta.dir, "data", "votes_sample.big.htm");
+const samplePath = join(import.meta.dirname, "data", "votes_sample.big.htm");
 
 describe("parseVotes", () => {
 	it("extracts votes from sample HTML", () => {

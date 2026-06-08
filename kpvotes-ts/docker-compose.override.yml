@@ -1,6 +1,0 @@
-# Local/dev overrides
-# Mount your data directory and set env vars via .env or shell
-services:
-  app:
-    volumes:
-      - ./data:/app/data
