@@ -61,9 +61,11 @@ jobs:
 
       - name: Compute image tag (docker-safe)
         id: meta
+        env:
+          FULL_SEM_VER: ${{ steps.gitversion.outputs.fullSemVer }}
         run: |
           # '+' is illegal in a docker tag — FullSemVer uses it for build metadata.
-          echo "tag=${GITVERSION_FULLSEMVER//+/-}" >> "$GITHUB_OUTPUT"
+          echo "tag=${FULL_SEM_VER//+/-}" >> "$GITHUB_OUTPUT"
 
       - uses: actions/setup-node@v4
         with:
@@ -91,9 +93,10 @@ jobs:
         with:
           context: .
           push: true
+          # ghcr requires a lowercase image path.
           tags: |
-            ghcr.io/${{ github.repository }}:${{ steps.meta.outputs.tag }}
-            ghcr.io/${{ github.repository }}:latest
+            ghcr.io/stdray/kpvotes:${{ steps.meta.outputs.tag }}
+            ghcr.io/stdray/kpvotes:latest
           build-args: |
             APP_VERSION=${{ steps.gitversion.outputs.fullSemVer }}
             GIT_SHORT_SHA=${{ steps.gitversion.outputs.shortSha }}
@@ -112,7 +115,7 @@ jobs:
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v1
         env:
-          IMAGE: ghcr.io/${{ github.repository }}:${{ needs.publish.outputs.tag }}
+          IMAGE: ghcr.io/stdray/kpvotes:${{ needs.publish.outputs.tag }}
           PETBOX_API_KEY: ${{ secrets.PETBOX_API_KEY }}
         with:
           host: ${{ secrets.DEPLOY_HOST }}
