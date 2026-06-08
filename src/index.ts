@@ -1,4 +1,4 @@
-import { CacheStore, diff, fetchCooldownMs, LAST_FETCH_KEY } from "./cache";
+import { CacheStore, fetchCooldownMs, LAST_FETCH_KEY, newVotes } from "./cache";
 import { getConfig } from "./config";
 import { type HealthStatus, pushHealth } from "./health";
 import { loadHtml } from "./loader";
@@ -70,78 +70,90 @@ async function runCycle(cfg: Config, cache: CacheStore): Promise<void> {
 	const extra: Record<string, string> = {};
 
 	try {
-		// Rate-limit guard: never hit Kinopoisk more than once per hour, even across
-		// restarts/manual runs — too-frequent requests trigger SmartCaptcha. The last
-		// fetch instant is persisted in PetBox so the guard survives a restart.
-		const last = await cache.getMeta(LAST_FETCH_KEY);
-		const cooldownMs = fetchCooldownMs(last, Date.now(), MIN_FETCH_INTERVAL_MS);
-		if (cooldownMs > 0) {
-			log("info", "Skipping fetch — within 1h of last fetch", {
-				lastFetchAt: last,
-				nextEligibleInMs: cooldownMs,
-			});
-			extra.reason = "rate-limited";
-			return; // status stays "healthy": skipping is normal, not a failure
+		// 1. Drain any leftover `pending` votes from a previous crashed cycle FIRST —
+		//    they were already fetched, so process them without re-hitting Kinopoisk.
+		let pending = await cache.getPending();
+		if (pending.length > 0) {
+			log("info", "Resuming pending votes from a previous run", { pending: pending.length });
+		} else {
+			// 2. No leftovers → fetch the page, subject to the rate-limit guard.
+			//    Never hit Kinopoisk more than once per hour (SmartCaptcha); the last
+			//    fetch instant is persisted in PetBox so the guard survives restarts.
+			const last = await cache.getMeta(LAST_FETCH_KEY);
+			const cooldownMs = fetchCooldownMs(last, Date.now(), MIN_FETCH_INTERVAL_MS);
+			if (cooldownMs > 0) {
+				log("info", "Skipping fetch — within 1h of last fetch", {
+					lastFetchAt: last,
+					nextEligibleInMs: cooldownMs,
+				});
+				extra.reason = "rate-limited";
+				return; // status stays "healthy": skipping is normal, not a failure
+			}
+			// Stamp the attempt up front so a crash mid-fetch still counts against the budget.
+			await cache.setMeta(LAST_FETCH_KEY, new Date().toISOString());
+
+			log("info", "Loading page from Kinopoisk", { uri: cfg.votesUrl });
+			const html = await loadHtml(cfg);
+
+			log("info", "Parsing votes", { htmlSize: html.length });
+			const freshVotes = parseVotes(html);
+			log("info", "Parse complete", { votesFound: freshVotes.length });
+
+			if (!freshVotes.length) {
+				const block = detectBlock(html);
+				log("warn", block ? `Blocked: ${block}` : "No votes found", {
+					htmlSize: html.length,
+					blockReason: block,
+				});
+				status = "degraded";
+				extra.reason = block ?? "no-votes";
+				return;
+			}
+
+			const known = await cache.knownKeys();
+			const firstRun = known.size === 0;
+
+			const fresh = newVotes(known, freshVotes);
+			log("info", "Diff complete", { known: known.size, fresh: freshVotes.length, new: fresh.length });
+
+			if (firstRun) {
+				// First ever run: seed everything as processed so the back-catalogue
+				// is NOT tweeted (this is what was missed in the stale-seed incident).
+				log("info", "First run — seeding cache without tweeting", { voteCount: freshVotes.length });
+				await cache.insertProcessed(freshVotes);
+				return;
+			}
+
+			if (fresh.length === 0) {
+				log("info", "No new votes");
+				return;
+			}
+
+			// 3. Persist the new votes as `pending` BEFORE tweeting — so a crash mid-loop
+			//    leaves them in the store (the PageVotesPath equivalent) and the next
+			//    cycle resumes them above without re-fetching.
+			await cache.insertPending(fresh);
+			pending = fresh;
 		}
-		// Stamp the attempt up front so a crash mid-fetch still counts against the budget.
-		await cache.setMeta(LAST_FETCH_KEY, new Date().toISOString());
 
-		log("info", "Loading page from Kinopoisk", { uri: cfg.votesUrl });
-		const html = await loadHtml(cfg);
-
-		log("info", "Parsing votes", { htmlSize: html.length });
-		const freshVotes = parseVotes(html);
-		log("info", "Parse complete", { votesFound: freshVotes.length });
-
-		if (!freshVotes.length) {
-			const block = detectBlock(html);
-			log("warn", block ? `Blocked: ${block}` : "No votes found", {
-				htmlSize: html.length,
-				blockReason: block,
-			});
-			status = "degraded";
-			extra.reason = block ?? "no-votes";
-			return;
-		}
-
-		const cached = await cache.read();
-
-		if (!cached) {
-			log("info", "No cache, creating initial cache", { voteCount: freshVotes.length });
-			await cache.write(freshVotes);
-			return;
-		}
-
-		const newVotes = diff(cached, freshVotes);
-		log("info", "Diff complete", {
-			cached: cached.length,
-			fresh: freshVotes.length,
-			new: newVotes.length,
-		});
-
-		for (const vote of newVotes) {
-			log("info", "New vote", {
-				name: vote.Name,
-				vote: vote.Vote,
-				uri: vote.Uri,
-			});
-
-			// Tweet first; only persist to cache once it's posted, so a failed
-			// tweet is retried next cycle rather than silently swallowed.
+		// 4. Process the pending queue: tweet, then mark processed (one at a time so a
+		//    failure leaves the rest pending for the next cycle).
+		for (const vote of pending) {
+			log("info", "New vote", { name: vote.Name, vote: vote.Vote, uri: vote.Uri });
 			try {
 				await postVote(cfg, vote);
-				cached.push(vote);
-				await cache.insert(vote);
+				await cache.markProcessed(vote);
 				// Space out posts to stay within Twitter write limits.
 				await sleep(30000);
 			} catch (err) {
-				log("error", "Failed to post vote, will retry next cycle", {
+				log("error", "Failed to post vote, stays pending for next cycle", {
 					name: vote.Name,
 					uri: vote.Uri,
 					error: err instanceof Error ? err : new Error(String(err)),
 				});
 				status = "degraded";
 				extra.reason = "tweet-failed";
+				break; // stop on first failure; remaining stay pending
 			}
 		}
 
