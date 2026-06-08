@@ -5,7 +5,7 @@ import { loadHtml } from "./loader";
 import { closeLogger, initLogger, log } from "./logger";
 import { detectBlock, parseVotes } from "./parser";
 import { runtimeInfo, tagVector } from "./runtime";
-import { postTweet } from "./twitter";
+import { CreditsDepletedError, postTweet } from "./twitter";
 import type { Config, Vote } from "./types";
 
 /** Minimum gap between Kinopoisk fetches — too-frequent requests trip SmartCaptcha. */
@@ -146,6 +146,18 @@ async function runCycle(cfg: Config, cache: CacheStore): Promise<void> {
 				// Space out posts to stay within Twitter write limits.
 				await sleep(30000);
 			} catch (err) {
+				if (err instanceof CreditsDepletedError) {
+					// X has no write credits left — every further post would 402.
+					// Stop immediately (don't burn the rest of the queue in a tight
+					// 402 loop); the remaining votes stay `pending` and will post
+					// once the balance is topped up.
+					log("warn", "X API credits depleted — pausing posting until topped up", {
+						remainingPending: pending.length - pending.indexOf(vote),
+					});
+					status = "degraded";
+					extra.reason = "credits-depleted";
+					break;
+				}
 				log("error", "Failed to post vote, stays pending for next cycle", {
 					name: vote.Name,
 					uri: vote.Uri,
