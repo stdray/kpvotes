@@ -45,16 +45,26 @@ export function initLogger(cfg: Config): winston.Logger {
  * transport batches events (~2s) and would otherwise drop the tail on exit.
  */
 export async function closeLogger(): Promise<void> {
-	if (_seqTransport) {
+	const logger = _logger;
+	const seq = _seqTransport;
+	// Null out first so this is idempotent and a late log() can't resurrect a
+	// half-closed transport.
+	_logger = null;
+	_seqTransport = null;
+
+	// Flush + close the Seq transport. winston's logger.close() would also unpipe
+	// and re-close this transport, so we do NOT also call logger.close() — that
+	// double-close throws "already closed". Closing the transport is enough to
+	// flush the batch and release the process.
+	if (seq) {
 		try {
-			await _seqTransport.close();
+			await seq.close();
 		} catch (e) {
 			console.error("[seq] close failed", e instanceof Error ? e.message : e);
 		}
+	} else {
+		logger?.close();
 	}
-	_logger?.close();
-	_logger = null;
-	_seqTransport = null;
 }
 
 export function getLogger(): winston.Logger {
