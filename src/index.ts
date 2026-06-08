@@ -1,4 +1,4 @@
-import { CacheStore, diff } from "./cache";
+import { CacheStore, diff, fetchCooldownMs, LAST_FETCH_KEY } from "./cache";
 import { getConfig } from "./config";
 import { type HealthStatus, pushHealth } from "./health";
 import { loadHtml } from "./loader";
@@ -7,6 +7,9 @@ import { detectBlock, parseVotes } from "./parser";
 import { runtimeInfo, tagVector } from "./runtime";
 import { postTweet } from "./twitter";
 import type { Config, Vote } from "./types";
+
+/** Minimum gap between Kinopoisk fetches — too-frequent requests trip SmartCaptcha. */
+const MIN_FETCH_INTERVAL_MS = 60 * 60 * 1000;
 
 async function main(): Promise<void> {
 	const cfg = await getConfig();
@@ -67,6 +70,22 @@ async function runCycle(cfg: Config, cache: CacheStore): Promise<void> {
 	const extra: Record<string, string> = {};
 
 	try {
+		// Rate-limit guard: never hit Kinopoisk more than once per hour, even across
+		// restarts/manual runs — too-frequent requests trigger SmartCaptcha. The last
+		// fetch instant is persisted in PetBox so the guard survives a restart.
+		const last = await cache.getMeta(LAST_FETCH_KEY);
+		const cooldownMs = fetchCooldownMs(last, Date.now(), MIN_FETCH_INTERVAL_MS);
+		if (cooldownMs > 0) {
+			log("info", "Skipping fetch — within 1h of last fetch", {
+				lastFetchAt: last,
+				nextEligibleInMs: cooldownMs,
+			});
+			extra.reason = "rate-limited";
+			return; // status stays "healthy": skipping is normal, not a failure
+		}
+		// Stamp the attempt up front so a crash mid-fetch still counts against the budget.
+		await cache.setMeta(LAST_FETCH_KEY, new Date().toISOString());
+
 		log("info", "Loading page from Kinopoisk", { uri: cfg.votesUrl });
 		const html = await loadHtml(cfg);
 

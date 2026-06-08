@@ -5,12 +5,16 @@ import type { Vote } from "./types";
 const VOTES_SELECTOR = ".historyVotes .item";
 const CAPTCHA_SELECTOR = ".CheckboxCaptcha-Button";
 
-export type BlockReason = "captcha" | "vpn" | "bot" | null;
+export type BlockReason = "captcha" | "vpn" | "bot" | "sso" | null;
 
 export function detectBlock(html: string): BlockReason {
 	if (html.includes("CheckboxCaptcha")) return "captcha";
 	if (html.includes("Are you not a robot")) return "bot";
 	if (html.includes("you're using a") && html.includes("VPN")) return "vpn";
+	// SSO interstitial: the redirect chain didn't finish and we're stuck on
+	// sso.kinopoisk.ru/install (a small stub with no votes). Confirmed live —
+	// treat as a transient block so the cycle reports "degraded", not "no votes".
+	if (html.includes("sso.kinopoisk.ru") || html.includes("passport.yandex")) return "sso";
 	return null;
 }
 export function parseVotes(html: string): Vote[] {

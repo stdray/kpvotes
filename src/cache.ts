@@ -5,6 +5,12 @@ import type { Config, Vote } from "./types";
 //   CREATE TABLE votes (Uri TEXT NOT NULL, Name TEXT NOT NULL, Vote INTEGER NOT NULL);
 
 const SCHEMA_SQL = "CREATE TABLE IF NOT EXISTS votes (Uri TEXT NOT NULL, Name TEXT NOT NULL, Vote INTEGER NOT NULL)";
+// Small key/value table for worker state that must survive restarts (e.g. the
+// last Kinopoisk fetch time for the ≤1/hour rate-limit guard).
+const META_SQL = "CREATE TABLE IF NOT EXISTS meta (Key TEXT PRIMARY KEY, Value TEXT NOT NULL)";
+
+/** Key in the meta table for the last Kinopoisk fetch instant (ISO string). */
+export const LAST_FETCH_KEY = "last-fetch-at";
 
 /** Binds a PetBoxDataClient to this project's cache db so the rest of the code
  *  doesn't repeat project/db on every call. */
@@ -27,6 +33,31 @@ export class CacheStore {
 			// Already exists — createDb is not idempotent server-side; applySchema below is.
 		}
 		await this.client.applySchema(this.project, this.db, "001-votes", SCHEMA_SQL);
+		await this.client.applySchema(this.project, this.db, "002-meta", META_SQL);
+	}
+
+	/** Read a meta value (worker state), or null if unset. */
+	async getMeta(key: string): Promise<string | null> {
+		const rows = await this.client.query<{ Value: string }>(
+			this.project,
+			this.db,
+			"SELECT Value FROM meta WHERE Key = @k",
+			[{ name: "@k", value: key }],
+		);
+		return rows[0]?.Value ?? null;
+	}
+
+	/** Upsert a meta value. */
+	async setMeta(key: string, value: string): Promise<void> {
+		await this.client.exec(
+			this.project,
+			this.db,
+			"INSERT INTO meta (Key, Value) VALUES (@k, @v) ON CONFLICT(Key) DO UPDATE SET Value = @v",
+			[
+				{ name: "@k", value: key },
+				{ name: "@v", value },
+			],
+		);
 	}
 
 	async read(): Promise<Vote[] | null> {
@@ -54,6 +85,18 @@ export class CacheStore {
 /** Key for dedup: Uri + Vote */
 export function voteKey(v: Vote): string {
 	return `${v.Uri}|${v.Vote}`;
+}
+
+/**
+ * Rate-limit decision for the Kinopoisk fetch. Returns how long is still left
+ * before another fetch is allowed (0 = allowed now). `lastIso` is the persisted
+ * last-fetch instant (null = never fetched). Pure, so it's unit-testable.
+ */
+export function fetchCooldownMs(lastIso: string | null, nowMs: number, minIntervalMs: number): number {
+	if (!lastIso) return 0;
+	const last = Date.parse(lastIso);
+	if (Number.isNaN(last)) return 0; // unparseable → don't block
+	return Math.max(0, minIntervalMs - (nowMs - last));
 }
 
 /** Return votes from `fresh` that are not in `cached` (by Uri+Vote) */

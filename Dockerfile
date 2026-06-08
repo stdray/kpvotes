@@ -55,13 +55,30 @@ RUN mkdir -p /app/data && chown -R 65532:65532 /app
 
 # ── Runtime (distroless) ─────────────────────────────────────────────────────
 FROM ${RUNTIME_IMAGE} AS runtime
+
+# Build provenance — set from GitVersion in CI (build.cake/ci.yml). runtime.ts
+# reads these so every log line and health report says which build is running.
+ARG APP_VERSION=dev
+ARG GIT_SHORT_SHA=unknown
+ARG GIT_COMMIT_DATE=unknown
+
 ENV NODE_ENV=production \
 	LIGHTPANDA_EXECUTABLE_PATH=/usr/local/bin/lightpanda \
-	KPVOTES_DATA_PATH=/app/data
+	KPVOTES_DATA_PATH=/app/data \
+	KPVOTES_CONTAINER=true \
+	APP_VERSION=${APP_VERSION} \
+	GIT_SHORT_SHA=${GIT_SHORT_SHA} \
+	GIT_COMMIT_DATE=${GIT_COMMIT_DATE}
 WORKDIR /app
 
 COPY --from=lightpanda --chown=65532:65532 /lightpanda /usr/local/bin/lightpanda
 COPY --from=stage --chown=65532:65532 /app /app
+
+# OCI image labels (provenance visible via `docker inspect`).
+LABEL org.opencontainers.image.title="kpvotes" \
+	org.opencontainers.image.source="https://github.com/stdray/KpVotes" \
+	org.opencontainers.image.version="${APP_VERSION}" \
+	org.opencontainers.image.revision="${GIT_SHORT_SHA}"
 
 # distroless nodejs image's ENTRYPOINT is already `node`.
 USER nonroot
