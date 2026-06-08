@@ -11,59 +11,73 @@ permissions:
   packages: write
 
 concurrency:
-  group: ci-${{ github.ref_name }}-${{ github.sha }}
+  # On main/deploy the same commit can fire twice (push + deploy tag) — group by
+  # SHA so the later trigger cancels the earlier. PRs group by ref to save minutes.
+  group: >-
+    ${{ (github.ref == 'refs/heads/main' || github.ref == 'refs/tags/deploy')
+        && format('ci-commit-{0}', github.sha)
+        || format('ci-{0}', github.ref) }}
   cancel-in-progress: true
 
 jobs:
-  # ─── PR validation: lint + tests ───
+  # ─── PR validation: typecheck + lint + unit tests (node only) ───
   ci:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: 10.0.x
-
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Typecheck
+        run: npm run check
+      - name: Lint
+        run: npx @biomejs/biome check src/ tests/
+      - name: Unit tests
+        run: npm test
 
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Cake CI target (Lint + Test)
-        run: |
-          chmod +x ./build.sh
-          ./build.sh --target=CI
-
-  # ─── Docker build + push to ghcr.io (main pushes + deploy tag) ───
+  # ─── Version + build + push to ghcr.io (main pushes + deploy tag) ───
   publish:
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     outputs:
-      dockerTag: ${{ steps.publish.outputs.dockerTag }}
+      version: ${{ steps.gitversion.outputs.fullSemVer }}
+      tag: ${{ steps.meta.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 0 # GitVersion needs full history
 
-      - uses: actions/setup-dotnet@v4
+      # Dedicated version step — computes the tag and passes it into the build.
+      - name: Install GitVersion
+        uses: gittools/actions/gitversion/setup@v3
         with:
-          dotnet-version: 10.0.x
+          versionSpec: '6.x'
+      - name: Determine version
+        id: gitversion
+        uses: gittools/actions/gitversion/execute@v3
+
+      - name: Compute image tag (docker-safe)
+        id: meta
+        run: |
+          # '+' is illegal in a docker tag — FullSemVer uses it for build metadata.
+          echo "tag=${GITVERSION_FULLSEMVER//+/-}" >> "$GITHUB_OUTPUT"
 
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-
-      - name: Install dependencies
-        run: npm ci
+          cache: npm
+      - run: npm ci
+      - name: Typecheck + lint + test
+        run: |
+          npm run check
+          npx @biomejs/biome check src/ tests/
+          npm test
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
+        uses: docker/setup-buildx-action@v3
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
@@ -72,21 +86,24 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Cake DockerPush (build + smoke + push)
-        id: publish
-        run: |
-          set -euo pipefail
-          chmod +x ./build.sh
-          TAG_FILE="$RUNNER_TEMP/docker-tag.txt"
-          ./build.sh --target=DockerPush \
-            --dockerPush=true \
-            --ghcrRepository=${{ github.repository }} \
-            --dockerTagOutput="$TAG_FILE" \
-            --dockerCacheFrom=type=gha \
-            --dockerCacheTo=type=gha,mode=max
-          echo "dockerTag=$(cat "$TAG_FILE")" >> "$GITHUB_OUTPUT"
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}:${{ steps.meta.outputs.tag }}
+            ghcr.io/${{ github.repository }}:latest
+          build-args: |
+            APP_VERSION=${{ steps.gitversion.outputs.fullSemVer }}
+            GIT_SHORT_SHA=${{ steps.gitversion.outputs.shortSha }}
+            GIT_COMMIT_DATE=${{ steps.gitversion.outputs.commitDate }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
   # ─── Deploy via SSH (only on manual `deploy` tag push) ───
+  # The app reads ALL config + secrets from PetBox, so the server only needs the
+  # PetBox bootstrap key — no Twitter/proxy secrets on the host.
   deploy:
     if: github.event_name == 'push' && github.ref == 'refs/tags/deploy'
     needs: publish
@@ -95,24 +112,20 @@ jobs:
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v1
         env:
-          TWITTER_APPKEY: ${{ secrets.KPVOTES_TWITTER_APPKEY }}
-          TWITTER_APPSECRET: ${{ secrets.KPVOTES_TWITTER_APPSECRET }}
-          TWITTER_ACCESSTOKEN: ${{ secrets.KPVOTES_TWITTER_ACCESSTOKEN }}
-          TWITTER_ACCESSSECRET: ${{ secrets.KPVOTES_TWITTER_ACCESSSECRET }}
+          IMAGE: ghcr.io/${{ github.repository }}:${{ needs.publish.outputs.tag }}
+          PETBOX_API_KEY: ${{ secrets.PETBOX_API_KEY }}
         with:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USERNAME }}
           password: ${{ secrets.DEPLOY_PASSWORD }}
-          envs: TWITTER_APPKEY,TWITTER_APPSECRET,TWITTER_ACCESSTOKEN,TWITTER_ACCESSSECRET
+          envs: IMAGE,PETBOX_API_KEY
           script: |
             set -euo pipefail
-            IMAGE="ghcr.io/${{ github.repository }}:${{ needs.publish.outputs.dockerTag }}"
-            cd /opt/kpvotes
-            docker compose pull app || docker pull "$IMAGE"
-            docker compose down app || true
-            KPVOTES_TWITTER_APPKEY="$TWITTER_APPKEY" \
-            KPVOTES_TWITTER_APPSECRET="$TWITTER_APPSECRET" \
-            KPVOTES_TWITTER_ACCESSTOKEN="$TWITTER_ACCESSTOKEN" \
-            KPVOTES_TWITTER_ACCESSSECRET="$TWITTER_ACCESSSECRET" \
-              docker compose up -d app
-            docker system prune -a -f
+            docker pull "$IMAGE"
+            docker rm -f kpvotes || true
+            docker run -d --name kpvotes --restart unless-stopped \
+              -e PETBOX_ENDPOINT="https://petbox.3po.su" \
+              -e PETBOX_API_KEY="$PETBOX_API_KEY" \
+              -e PETBOX_DATA_DB="kpvotes-cache" \
+              "$IMAGE"
+            docker image prune -f
