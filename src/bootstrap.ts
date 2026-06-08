@@ -1,26 +1,30 @@
 import { readFileSync } from "node:fs";
-import { CacheStore, voteKey } from "./cache";
+import { CacheStore, newVotes, voteKey } from "./cache";
 import { getConfig } from "./config";
-import { loadAllPages, totalPageCount } from "./loader";
+import { loadAllPages, loadHtml, totalPageCount } from "./loader";
 import { closeLogger, initLogger, log } from "./logger";
 import { detectBlock, parseVotes } from "./parser";
-import type { Vote } from "./types";
+import type { Config, Vote } from "./types";
 
 /**
- * One-off cache bootstrap — seeds the PetBox votes cache WITHOUT tweeting, so the
- * normal cycle has a complete baseline and doesn't tweet the whole back catalogue.
- * Run once before first production start.
+ * One-off cache bootstrap — populates the PetBox votes store WITHOUT tweeting, so
+ * the normal cycle has a baseline and doesn't tweet the back catalogue.
  *
- * Two modes:
- *   - Import (preferred): KPVOTES_SEED_FILE=path to a votes.json ([{Uri,Name,Vote}]).
- *     Fast, reliable, no Kinopoisk requests. Use the existing 142-vote history.
- *   - Crawl: no seed file → walk every votes-history page via Lightpanda.
- *     Subject to Kinopoisk's SSO/SmartCaptcha flakiness.
+ * Modes (pick via env):
+ *   page (KPVOTES_BOOTSTRAP_MODE=page) — fetch the current votes page (page 1) via
+ *     Lightpanda, parse it, and MERGE every vote into the store as `processed`
+ *     (only unknown ones are added; nothing is overwritten, nothing is tweeted).
+ *     Use this to refresh the cache with what's on the page right now.
+ *   file (KPVOTES_SEED_FILE=path) — import a votes.json ([{Uri,Name,Vote}]);
+ *     replaces the store (refuses if non-empty). No Kinopoisk request.
+ *   crawl (default) — walk every history page via Lightpanda; replaces the store
+ *     (refuses if non-empty). Subject to SSO/SmartCaptcha flakiness.
  *
- *   PETBOX_ENDPOINT=… PETBOX_API_KEY=… KPVOTES_SEED_FILE=votes.json node dist/bootstrap.js
+ *   PETBOX_ENDPOINT=… PETBOX_API_KEY=… KPVOTES_BOOTSTRAP_MODE=page node dist/bootstrap.js
  *
  * Env knobs:
- *   KPVOTES_SEED_FILE           import from this JSON instead of crawling
+ *   KPVOTES_BOOTSTRAP_MODE      'page' | 'file' | 'crawl' (default: file if SEED_FILE, else crawl)
+ *   KPVOTES_SEED_FILE           file-mode source JSON
  *   KPVOTES_BOOTSTRAP_DELAY_MS  delay between page fetches when crawling (default 20000)
  *   KPVOTES_BOOTSTRAP_MAX_PAGES cap pages for a dry run (default 0 = all)
  */
@@ -29,31 +33,85 @@ async function main(): Promise<void> {
 	initLogger(cfg);
 
 	const seedFile = process.env.KPVOTES_SEED_FILE;
+	const mode = process.env.KPVOTES_BOOTSTRAP_MODE ?? (seedFile ? "file" : "crawl");
 
 	const cache = new CacheStore(cfg);
 	await cache.ensureSchema();
 
+	if (mode === "page") {
+		await mergeCurrentPage(cfg, cache);
+		await closeLogger();
+		process.exit(0);
+	}
+
+	// file / crawl modes REPLACE the store, so they refuse on a non-empty cache.
 	const existing = await cache.read();
 	if (existing && existing.length > 0) {
-		log("warn", "Cache is not empty — bootstrap refuses to overwrite", { existing: existing.length });
-		log("warn", "Clear the votes table first if you really want to re-bootstrap.");
+		log("warn", "Cache is not empty — file/crawl bootstrap refuses to overwrite", { existing: existing.length });
+		log("warn", "Use KPVOTES_BOOTSTRAP_MODE=page to MERGE, or clear the votes table to re-seed.");
 		await closeLogger();
 		process.exit(2);
 	}
 
-	const votes = seedFile ? importFromFile(seedFile) : await crawl(cfg);
-
+	const votes = mode === "file" && seedFile ? importFromFile(seedFile) : await crawl(cfg);
 	if (votes.length === 0) {
 		log("error", "No votes to seed — refusing to write empty cache");
 		await closeLogger();
 		process.exit(4);
 	}
 
-	await cache.write(votes);
-	log("info", "Bootstrap complete — cache seeded", { votes: votes.length, source: seedFile ? "file" : "crawl" });
-
+	await cache.write(votes); // seeds all as processed
+	log("info", "Bootstrap complete — cache seeded", { votes: votes.length, mode });
 	await closeLogger();
 	process.exit(0);
+}
+
+/**
+ * Fetch the current votes page (page 1), parse it, and add every vote that isn't
+ * already known into the store as `processed` — no overwrite, no tweets.
+ */
+async function mergeCurrentPage(cfg: Config, cache: CacheStore): Promise<void> {
+	const attempts = Number(process.env.KPVOTES_BOOTSTRAP_ATTEMPTS ?? 5);
+	log("info", "Bootstrap(page): fetching current votes page", { votesUrl: cfg.votesUrl, attempts });
+
+	// The Kinopoisk SSO redirect chain is flaky and sometimes lands on the
+	// sso.kinopoisk.ru stub (zero votes). Retry with a fresh Lightpanda session
+	// (each retry re-runs SSO) until we get a real page.
+	let votes: Vote[] = [];
+	for (let i = 1; i <= attempts; i++) {
+		const html = await loadHtml(cfg);
+		const block = detectBlock(html);
+		votes = parseVotes(html);
+		log("info", "Bootstrap(page): attempt", {
+			attempt: i,
+			htmlSize: html.length,
+			votesFound: votes.length,
+			blockReason: block,
+		});
+		if (votes.length > 0) break;
+		if (i < attempts) log("warn", "Bootstrap(page): no votes (SSO/block) — retrying", { attempt: i });
+	}
+
+	if (votes.length === 0) {
+		log("error", "Bootstrap(page): zero votes after all attempts — nothing merged", { attempts });
+		process.exitCode = 3;
+		return;
+	}
+
+	const known = await cache.knownKeys();
+	const missing = newVotes(known, votes);
+	if (missing.length === 0) {
+		log("info", "Bootstrap(page): all page votes already known — nothing to add", { known: known.size });
+		return;
+	}
+
+	await cache.insertProcessed(missing);
+	log("info", "Bootstrap(page): merged page votes as processed", {
+		pageVotes: votes.length,
+		alreadyKnown: votes.length - missing.length,
+		added: missing.length,
+		totalKnown: known.size + missing.length,
+	});
 }
 
 /** Read and validate a votes.json ([{Uri,Name,Vote}]); de-dupe by Uri+Vote. */
@@ -86,7 +144,7 @@ function importFromFile(path: string): Vote[] {
 }
 
 /** Crawl every votes-history page via Lightpanda and collect unique votes. */
-async function crawl(cfg: import("./types").Config): Promise<Vote[]> {
+async function crawl(cfg: Config): Promise<Vote[]> {
 	const delayMs = Number(process.env.KPVOTES_BOOTSTRAP_DELAY_MS ?? 20000);
 	const maxPages = Number(process.env.KPVOTES_BOOTSTRAP_MAX_PAGES ?? 0);
 	log("info", "Bootstrap: crawling history", { votesUrl: cfg.votesUrl, delayMs, maxPages });
