@@ -5,8 +5,9 @@ import { log } from "./logger";
 import type { Config } from "./types";
 
 /** Extra settle time (ms) after domcontentloaded — Kinopoisk runs a long SSO
- *  redirect chain and JS render before the votes list appears. */
-const RENDER_WAIT_MS = 40000;
+ *  redirect chain and JS render before the votes list appears. 40s was often not
+ *  enough (landed on the sso.kinopoisk.ru stub), so allow up to 2 minutes. */
+const RENDER_WAIT_MS = 120000;
 
 /** Settle time for subsequent pages in the same session — SSO is already done,
  *  so the list renders much faster than the first hit. */
