@@ -12,12 +12,15 @@
 # there (same libc as Debian slim; it would NOT run on Alpine/musl). No shell
 # means the data dir + binary perms are staged at build time, not in runtime RUN.
 
-ARG NODE_IMAGE=node:22-bookworm-slim
+# Base images pulled via mirror.gcr.io (Google's public pull-through cache for
+# Docker Hub) so the build doesn't depend on Docker Hub's auth.docker.io, which
+# has been intermittently returning 5xx. distroless is already on gcr.io.
+ARG NODE_IMAGE=mirror.gcr.io/library/node:22-bookworm-slim
 ARG RUNTIME_IMAGE=gcr.io/distroless/nodejs22-debian12:nonroot
 ARG LIGHTPANDA_ARCH=x86_64-linux
 
 # ── Lightpanda binary ────────────────────────────────────────────────────────
-FROM debian:bookworm-slim AS lightpanda
+FROM mirror.gcr.io/library/debian:bookworm-slim AS lightpanda
 ARG LIGHTPANDA_ARCH
 RUN apt-get update \
 	&& apt-get install -y --no-install-recommends curl ca-certificates \
