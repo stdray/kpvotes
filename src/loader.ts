@@ -2,6 +2,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { lightpanda } from "@lightpanda/browser";
 import { type Browser, chromium } from "playwright-core";
 import { log } from "./logger";
+import { buildProxyUrl } from "./proxy";
 import type { Config } from "./types";
 
 /** Extra settle time (ms) after domcontentloaded — Kinopoisk runs a long SSO
@@ -13,11 +14,26 @@ const RENDER_WAIT_MS = 120000;
  *  so the list renders much faster than the first hit. */
 const PAGE_WAIT_MS = 8000;
 
-/** Build the http://user:pass@host:port proxy URL for the Lightpanda CLI. */
+/**
+ * Build the proxy URL for the Lightpanda CLI from the Kinopoisk-fetch proxy
+ * config. Uses the same `buildProxyUrl` helper as the Twitter poster, so config
+ * shape and URL construction are identical — only the value set is independent.
+ *
+ * NB: Lightpanda's `httpProxy` only supports HTTP proxies, so the scheme should
+ * be `http://`/`https://` here (a `socks5://` value would reach Lightpanda but it
+ * can't use it). A bad/empty proxy URL falls back to a direct fetch, mirroring
+ * the poster's behaviour. */
 function proxyUrl(cfg: Config): string | undefined {
 	if (!cfg.proxy) return undefined;
-	const auth = cfg.proxy.username ? `${cfg.proxy.username}:${cfg.proxy.password ?? ""}@` : "";
-	return `http://${auth}${cfg.proxy.server}`;
+	try {
+		return buildProxyUrl(cfg.proxy.server, cfg.proxy.username, cfg.proxy.password);
+	} catch (err) {
+		log("warn", "Kinopoisk proxy misconfigured — fetching direct", {
+			server: cfg.proxy.server,
+			error: err instanceof Error ? err.message : String(err),
+		});
+		return undefined;
+	}
 }
 
 function dumpPage(cfg: Config, html: string, tag: string): void {

@@ -1,16 +1,38 @@
-import { ApiResponseError, TwitterApi } from "twitter-api-v2";
+import { ApiResponseError, type IClientSettings, TwitterApi } from "twitter-api-v2";
+import { log } from "./logger";
+import { createProxyAgent } from "./proxy";
 import type { Config } from "./types";
 
 let _client: TwitterApi | null = null;
 
 function getClient(cfg: Config): TwitterApi {
 	if (_client) return _client;
-	_client = new TwitterApi({
-		appKey: cfg.twitter.appKey,
-		appSecret: cfg.twitter.appSecret,
-		accessToken: cfg.twitter.accessToken,
-		accessSecret: cfg.twitter.accessSecret,
-	});
+
+	// Route the poster through a proxy when configured. A bad proxy URL must not
+	// crash the worker — log and fall back to a direct connection.
+	let settings: Partial<IClientSettings> | undefined;
+	if (cfg.twitterProxyEnabled && cfg.twitterProxy) {
+		try {
+			const { server, username, password } = cfg.twitterProxy;
+			settings = { httpAgent: createProxyAgent(server, username, password) };
+			log("info", "Twitter poster using proxy", { server });
+		} catch (err) {
+			log("warn", "Twitter proxy misconfigured — posting direct", {
+				server: cfg.twitterProxy.server,
+				error: err instanceof Error ? err.message : String(err),
+			});
+		}
+	}
+
+	_client = new TwitterApi(
+		{
+			appKey: cfg.twitter.appKey,
+			appSecret: cfg.twitter.appSecret,
+			accessToken: cfg.twitter.accessToken,
+			accessSecret: cfg.twitter.accessSecret,
+		},
+		settings,
+	);
 	return _client;
 }
 

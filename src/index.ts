@@ -32,6 +32,8 @@ async function main(): Promise<void> {
 		userAgent: cfg.userAgent,
 		proxyEnabled: cfg.proxyEnabled,
 		proxyServer: cfg.proxy?.server ?? null,
+		twitterProxyEnabled: cfg.twitterProxyEnabled,
+		twitterProxyServer: cfg.twitterProxy?.server ?? null,
 	});
 
 	const cache = new CacheStore(cfg);

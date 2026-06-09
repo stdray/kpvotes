@@ -31,6 +31,14 @@ export interface Config {
 		username?: string;
 		password?: string;
 	};
+	/** Optional proxy for the Twitter poster — independent of the Kinopoisk-fetch
+	 *  proxy above. Server URL carries the scheme (socks5://… or http://…). */
+	twitterProxyEnabled: boolean;
+	twitterProxy?: {
+		server: string;
+		username?: string;
+		password?: string;
+	};
 	seq: {
 		serverUrl: string;
 		apiKey: string;

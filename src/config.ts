@@ -31,6 +31,11 @@ export async function getConfig(): Promise<Config> {
 	const proxyUser = cfg.get("kpvotes.proxy-username");
 	const proxyPass = cfg.get("kpvotes.proxy-password");
 
+	const twitterProxyEnabled = cfg.get("kpvotes.twitter-proxy-enabled") === "true";
+	const twitterProxyServer = cfg.get("kpvotes.twitter-proxy-server");
+	const twitterProxyUser = cfg.get("kpvotes.twitter-proxy-username");
+	const twitterProxyPass = cfg.get("kpvotes.twitter-proxy-password");
+
 	const dumpPages = cfg.get("kpvotes.dump-pages") === "true";
 	const dataPath = (process.env.KPVOTES_DATA_PATH ?? "data").replace(/\/+$/, "");
 
@@ -47,6 +52,7 @@ export async function getConfig(): Promise<Config> {
 		intervalMinutes: cfg.getNumber("kpvotes.interval-minutes") ?? 120,
 		userAgent: required(cfg.get("kpvotes.user-agent"), "kpvotes.user-agent"),
 		proxyEnabled,
+		twitterProxyEnabled,
 		twitter: {
 			appKey: required(cfg.get("kpvotes.twitter-app-key"), "kpvotes.twitter-app-key"),
 			appSecret: required(cfg.get("kpvotes.twitter-app-secret"), "kpvotes.twitter-app-secret"),
@@ -63,6 +69,12 @@ export async function getConfig(): Promise<Config> {
 		obj.proxy = { server: proxyServer };
 		if (proxyUser !== undefined) obj.proxy.username = proxyUser;
 		if (proxyPass !== undefined) obj.proxy.password = proxyPass;
+	}
+
+	if (twitterProxyEnabled && twitterProxyServer) {
+		obj.twitterProxy = { server: twitterProxyServer };
+		if (twitterProxyUser !== undefined) obj.twitterProxy.username = twitterProxyUser;
+		if (twitterProxyPass !== undefined) obj.twitterProxy.password = twitterProxyPass;
 	}
 
 	_config = obj;
